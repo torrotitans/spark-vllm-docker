@@ -2,3 +2,5 @@
 build-metadata.yaml
 .roo
 plans/
+systemd/
+tests/
