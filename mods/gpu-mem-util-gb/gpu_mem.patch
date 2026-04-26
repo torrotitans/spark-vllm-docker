@@ -79,7 +79,7 @@ index 5909b3043..c2607df6a 100644
          kv_cache_memory_bytes: Size of KV Cache per GPU in bytes. By default,
              this is set to None and vllm can automatically infer the kv cache
              size based on gpu_memory_utilization. However, users may want to
-@@ -234,6 +239,7 @@ class LLM:
+@@ -229,6 +234,7 @@ class LLM:
          chat_template: Path | str | None = None,
          seed: int = 0,
          gpu_memory_utilization: float = 0.92,
@@ -251,5 +251,3 @@ index d06c40ed6..89c94e641 100644
 +            )
 +
      return requested_memory
- 
- 
