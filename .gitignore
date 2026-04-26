@@ -4,3 +4,4 @@ build-metadata.yaml
 plans/
 systemd/
 tests/
+discover-sparks.sh
