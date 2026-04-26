@@ -1,2 +1,3 @@
 .env
-build-metadata.yaml.roo
+build-metadata.yaml
+.roo
