@@ -50,7 +50,7 @@ RUN apt update && \
 
 # Additional deps
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
-     uv pip install torch==2.11.0 torchvision torchaudio triton --index-url https://download.pytorch.org/whl/cu130 && \
+     uv pip install torch==2.11.0+cu130 torchvision torchaudio triton --index-url https://download.pytorch.org/whl/cu130 && \
      uv pip install nvidia-nvshmem-cu13 "apache-tvm-ffi<0.2" filelock pynvml requests tqdm
 
 # Configure Ccache for CUDA/C++
@@ -262,7 +262,11 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     sed -i "/flashinfer/d" requirements/cuda.txt && \
     sed -i '/^triton\b/d' requirements/test/cuda.txt && \
     sed -i '/^fastsafetensors\b/d' requirements/test/cuda.txt && \
-    uv pip install -r requirements/build/cuda.txt
+    sed -i '/^torch==/d' requirements/build/cuda.txt && \
+    sed -i '/^torchaudio==/d' requirements/build/cuda.txt && \
+    sed -i '/^torchvision==/d' requirements/build/cuda.txt && \
+    uv pip install -r requirements/build/cuda.txt && \
+    uv pip install torch==2.11.0+cu130 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
 
 # Apply Patches
 # TEMPORARY PATCH for fastsafetensors loading in cluster setup - tracking https://github.com/vllm-project/vllm/issues/34180
@@ -340,11 +344,12 @@ ARG PRE_TRANSFORMERS=0
 
 # Install deps
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
-     uv pip install torch==2.11.0 torchvision torchaudio triton --index-url https://download.pytorch.org/whl/cu130 && \
+     uv pip install torch==2.11.0+cu130 torchvision torchaudio triton --index-url https://download.pytorch.org/whl/cu130 && \
      uv pip install nvidia-nvshmem-cu13 "apache-tvm-ffi<0.2"
 
 # Install wheels from host ./wheels/ (bind-mounted from build context — no layer bloat)
 # With --tf5: override vLLM's transformers<5 constraint to get transformers>=5
+# IMPORTANT: Reinstall CUDA torch after vLLM wheel installation to prevent downgrade
 RUN --mount=type=bind,source=wheels,target=/workspace/wheels \
     --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     if [ "$PRE_TRANSFORMERS" = "1" ]; then \
@@ -352,7 +357,8 @@ RUN --mount=type=bind,source=wheels,target=/workspace/wheels \
         uv pip install /workspace/wheels/*.whl --override /tmp/tf-override.txt; \
     else \
         uv pip install /workspace/wheels/*.whl; \
-    fi
+    fi && \
+    uv pip install torch==2.11.0+cu130 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130 --reinstall-package torch torchvision torchaudio
 
 # Setup environment for runtime
 ARG TORCH_CUDA_ARCH_LIST="12.1a"
@@ -371,6 +377,29 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
 # Fix NCCL
 RUN rm /usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/libnccl.so.2 && \
     ln -s /usr/lib/aarch64-linux-gnu/libnccl.so.2 /usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/libnccl.so.2
-    
+
+# DGX Spark Driver Version Validation
+# Warns if driver is not 580.x (known issue: 590.x has CUDAGraph deadlock on GB10)
+RUN echo '#!/bin/bash' > /usr/local/bin/check-dgx-driver && \
+    echo 'set -e' >> /usr/local/bin/check-dgx-driver && \
+    echo 'DRIVER_VERSION=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1 | tr -d " ")' >> /usr/local/bin/check-dgx-driver && \
+    echo 'DRIVER_MAJOR=$(echo "$DRIVER_VERSION" | cut -d. -f1)' >> /usr/local/bin/check-dgx-driver && \
+    echo 'echo "=== DGX Spark Driver Check ==="' >> /usr/local/bin/check-dgx-driver && \
+    echo 'echo "Detected NVIDIA Driver: $DRIVER_VERSION"' >> /usr/local/bin/check-dgx-driver && \
+    echo 'if [ "$DRIVER_MAJOR" -eq 580 ]; then' >> /usr/local/bin/check-dgx-driver && \
+    echo '    echo "✅ Driver version $DRIVER_VERSION is compatible"' >> /usr/local/bin/check-dgx-driver && \
+    echo 'elif [ "$DRIVER_MAJOR" -eq 590 ]; then' >> /usr/local/bin/check-dgx-driver && \
+    echo '    echo "⚠️  WARNING: Driver 590.x has known CUDAGraph deadlock bug on GB10"' >> /usr/local/bin/check-dgx-driver && \
+    echo '    echo "   Consider downgrading to driver 580.x for stable operation"' >> /usr/local/bin/check-dgx-driver && \
+    echo 'elif [ "$DRIVER_MAJOR" -gt 580 ]; then' >> /usr/local/bin/check-dgx-driver && \
+    echo '    echo "⚠️  WARNING: Driver $DRIVER_VERSION may have compatibility issues"' >> /usr/local/bin/check-dgx-driver && \
+    echo '    echo "   Recommended: Use NVIDIA driver 580.x for DGX Spark"' >> /usr/local/bin/check-dgx-driver && \
+    echo 'else' >> /usr/local/bin/check-dgx-driver && \
+    echo '    echo "❌ ERROR: Driver $DRIVER_VERSION is not compatible"' >> /usr/local/bin/check-dgx-driver && \
+    echo '    echo "   Required: NVIDIA driver 580.x for DGX Spark"' >> /usr/local/bin/check-dgx-driver && \
+    echo '    exit 1' >> /usr/local/bin/check-dgx-driver && \
+    echo 'fi' >> /usr/local/bin/check-dgx-driver && \
+    chmod +x /usr/local/bin/check-dgx-driver
+
 # Build metadata (generated by build-and-copy.sh)
 COPY build-metadata.yaml /workspace/build-metadata.yaml
